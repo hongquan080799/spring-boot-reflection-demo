@@ -2,54 +2,54 @@ package com.example.spring_boot_reflection_demo;
 
 import com.example.spring_boot_reflection_demo.annotation.QController;
 import com.example.spring_boot_reflection_demo.annotation.QRequestMapping;
+import com.example.spring_boot_reflection_demo.qenum.QMethod;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.lang.reflect.Method;
 import java.util.HashMap;
 import java.util.Map;
 
 public class SimpleDispatcher {
-    // Store both the method and the controller instance
-    private final Map<String, ControllerMethodPair> routeMap = new HashMap<>();
+    // Store both the method, controller instance, and HTTP method
+    private final Map<String, Map<QMethod, ControllerMethodPair>> routeMap = new HashMap<>();
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
-    // Inner class to hold both method and controller
-    private static class ControllerMethodPair {
-        private final Object controller;
-        private final Method method;
-
-        public ControllerMethodPair(Object controller, Method method) {
-            this.controller = controller;
-            this.method = method;
-        }
-
-        public Object getController() {
-            return controller;
-        }
-
-        public Method getMethod() {
-            return method;
-        }
+    private record ControllerMethodPair(Object controller, Method method) {
     }
 
-    // Register controller and its methods
+    // Register controller and its methods for different HTTP methods
     public void register(Object controller) {
         Class<?> clazz = controller.getClass();
         if (clazz.isAnnotationPresent(QController.class)) {
             for (Method method : clazz.getDeclaredMethods()) {
                 if (method.isAnnotationPresent(QRequestMapping.class)) {
-                    QRequestMapping getMapping = method.getAnnotation(QRequestMapping.class);
-                    // Store both the controller and the method in the map
-                    routeMap.put(getMapping.value(), new ControllerMethodPair(controller, method));
+                    QRequestMapping mapping = method.getAnnotation(QRequestMapping.class);
+                    String path = mapping.value();
+                    QMethod httpMethod = mapping.method();
+
+                    routeMap.computeIfAbsent(path, k -> new HashMap<>())
+                            .put(httpMethod, new ControllerMethodPair(controller, method));
+                    System.out.println("Register endpoint [" + httpMethod.name() + ":" + path + "] successfully");
                 }
             }
         }
     }
 
-    // Handle request by looking up method and invoking on the correct controller
-    public String handleRequest(String path) throws Exception {
-        ControllerMethodPair pair = routeMap.get(path);
-        if (pair != null) {
-            // Invoke the method on the controller instance
-            return (String) pair.getMethod().invoke(pair.getController());
+    // Handle request by looking up method, controller, and HTTP method
+    public String handleRequest(String path, QMethod httpMethod, String requestBody) throws Exception {
+        Map<QMethod, ControllerMethodPair> methodMap = routeMap.get(path);
+        if (methodMap != null && methodMap.containsKey(httpMethod)) {
+            ControllerMethodPair pair = methodMap.get(httpMethod);
+
+            Object result;
+            if (httpMethod == QMethod.GET || requestBody == null) {
+                result = pair.method().invoke(pair.controller());
+            } else {
+                Class<?> paramType = pair.method().getParameterTypes()[0];
+                Object deserialized = objectMapper.readValue(requestBody, paramType);
+                result = pair.method().invoke(pair.controller(), deserialized);
+            }
+            return objectMapper.writeValueAsString(result);
         }
         return "404 Not Found";
     }
